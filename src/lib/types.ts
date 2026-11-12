@@ -12,6 +12,8 @@ export interface Creator {
   commission_model: CommissionModel;
   commission_value: number;
   is_active: boolean;
+  auth_user_id: string | null;
+  dashboard_permissions: Record<string, boolean>;
   created_at: string;
 }
 
@@ -20,8 +22,8 @@ export interface Lead {
   customer_name: string;
   email: string;
   phone: string;
-  creator_id: string;
-  referral_code: string;
+  creator_id: string | null;
+  referral_code: string | null;
   source: string;
   product_id: string | null;
   product_name?: string | null;
@@ -60,4 +62,3 @@ export interface Payment {
   created_at: string;
   creators?: { name: string; referral_code: string } | null;
 }
-

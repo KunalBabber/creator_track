@@ -2,9 +2,9 @@
 
 import {
   Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Bell, Check,
-  CircleDollarSign, ClipboardList, Copy, CreditCard, ExternalLink, Filter,
-  LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plus, Search, Settings,
-  ShieldCheck, ShoppingBag, Users, X,
+  CircleDollarSign, ClipboardList, Copy, CreditCard, ExternalLink, Eye, Filter,
+  KeyRound, LayoutDashboard, Link2, LoaderCircle, LogOut, MailPlus, Menu, Plus,
+  Search, Settings, ShieldCheck, ShoppingBag, SlidersHorizontal, Users, X,
 } from "lucide-react";
 import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer,
@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import type { Commission, CommissionModel, Creator, Lead, LeadStatus, Payment, Product } from "@/lib/types";
 
@@ -24,6 +25,29 @@ type CreatorDraft = {
 };
 type MonthlyPerformance = { month: string; leads: number; conversions: number; revenue: number };
 type GoogleIntegration = { form_url: string | null; sheet_url: string | null; referral_entry_id: string | null; campaign_entry_id: string | null; is_active: boolean };
+type DashboardPermissionKey =
+  | "show_total_clicks" | "show_total_leads" | "show_qualified_leads" | "show_completed_clients"
+  | "show_pending_clients" | "show_rejected_leads" | "show_conversion_rate" | "show_commission_earned"
+  | "show_pending_commission" | "show_paid_commission" | "show_payment_history"
+  | "show_lead_performance_chart" | "show_recent_activity" | "show_monthly_performance" | "show_referral_link";
+type DashboardPermissions = Record<DashboardPermissionKey, boolean>;
+type CreatorAccount = { creator_id: string; linked: boolean; email: string; active: boolean; last_sign_in_at: string | null };
+const defaultPermissions: DashboardPermissions = {
+  show_total_clicks: false, show_total_leads: true, show_qualified_leads: false, show_completed_clients: true,
+  show_pending_clients: false, show_rejected_leads: false, show_conversion_rate: false, show_commission_earned: false,
+  show_pending_commission: false, show_paid_commission: false, show_payment_history: false,
+  show_lead_performance_chart: false, show_recent_activity: false, show_monthly_performance: false, show_referral_link: true,
+};
+const permissionOptions: { key: DashboardPermissionKey; label: string }[] = [
+  { key: "show_total_clicks", label: "Show total clicks" }, { key: "show_total_leads", label: "Show total leads" },
+  { key: "show_qualified_leads", label: "Show qualified leads" }, { key: "show_completed_clients", label: "Show completed clients" },
+  { key: "show_pending_clients", label: "Show pending clients" }, { key: "show_rejected_leads", label: "Show rejected leads" },
+  { key: "show_conversion_rate", label: "Show conversion rate" }, { key: "show_commission_earned", label: "Show commission earned" },
+  { key: "show_pending_commission", label: "Show pending commission" }, { key: "show_paid_commission", label: "Show paid commission" },
+  { key: "show_payment_history", label: "Show payment history" }, { key: "show_lead_performance_chart", label: "Show lead performance chart" },
+  { key: "show_recent_activity", label: "Show recent activity" }, { key: "show_monthly_performance", label: "Show monthly performance" },
+  { key: "show_referral_link", label: "Show referral link" },
+];
 
 const navigation: { name: View; icon: typeof LayoutDashboard }[] = [
   { name: "Overview", icon: LayoutDashboard }, { name: "Creators", icon: Users },
@@ -64,8 +88,10 @@ function makeGooglePrefillUrl(formUrl: string | null | undefined, referralEntryI
 
 export default function Dashboard() {
   const supabase = getSupabase();
+  const router = useRouter();
   const [view, setView] = useState<View>("Overview");
-  const [user, setUser] = useState<{ email?: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
+  const [role, setRole] = useState<"admin" | "creator" | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [migrationRequired, setMigrationRequired] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -82,6 +108,7 @@ export default function Dashboard() {
   const [products, setProducts] = useState<Product[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [creatorAccounts, setCreatorAccounts] = useState<Record<string, CreatorAccount>>({});
   const [links, setLinks] = useState<Record<string, unknown>[]>([]);
   const [integration, setIntegration] = useState<GoogleIntegration | null>(null);
   const [search, setSearch] = useState("");
@@ -91,6 +118,9 @@ export default function Dashboard() {
   const [creatorModal, setCreatorModal] = useState(false);
   const [editing, setEditing] = useState<Creator | null>(null);
   const [creatorDraft, setCreatorDraft] = useState<CreatorDraft>(emptyCreator);
+  const [inviteLogin, setInviteLogin] = useState(false);
+  const [permissionsCreator, setPermissionsCreator] = useState<Creator | null>(null);
+  const [profileCreator, setProfileCreator] = useState<Creator | null>(null);
   const [productName, setProductName] = useState("");
   const [productPrice, setProductPrice] = useState("");
   const [businessName, setBusinessName] = useState("Your business");
@@ -101,7 +131,7 @@ export default function Dashboard() {
   const [paymentReference, setPaymentReference] = useState("");
 
   const loadData = useCallback(async () => {
-    if (!supabase || !user) return;
+    if (!supabase || !user || role !== "admin") return;
     setLoading(true); setError("");
     const results = await Promise.all([
       supabase.from("creators").select("*").order("created_at", { ascending: false }),
@@ -132,7 +162,7 @@ export default function Dashboard() {
       setIntegration((results[7].data as GoogleIntegration | null) ?? null);
     }
     setLoading(false);
-  }, [supabase, user]);
+  }, [supabase, user, role]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -142,14 +172,47 @@ export default function Dashboard() {
     });
     supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (sessionError) setError(sessionError.message);
-      setUser(data.session?.user ? { email: data.session.user.email } : null);
+      setUser(data.session?.user ? { id: data.session.user.id, email: data.session.user.email } : null);
+      setRole(null);
       setAuthLoading(false);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
-      setUser(session?.user ? { email: session.user.email } : null);
+      setUser(session?.user ? { id: session.user.id, email: session.user.email } : null);
+      setRole(null);
     });
     return () => subscription.unsubscribe();
   }, [supabase]);
+
+  useEffect(() => {
+    if (!supabase || !user) return;
+    const timer = window.setTimeout(() => {
+      void supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
+        .then(({ data, error: profileError }) => {
+          if (profileError) setError(`Could not verify account role: ${profileError.message}`);
+          setRole(data?.role === "admin" || data?.role === "creator" ? data.role : null);
+        });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [supabase, user]);
+
+  useEffect(() => {
+    if (role === "creator") router.replace("/creator/dashboard");
+  }, [role, router]);
+
+  useEffect(() => {
+    if (!supabase || role !== "admin") return;
+    let cancelled = false;
+    void supabase.auth.getSession().then(async ({ data }) => {
+      const token = data.session?.access_token;
+      if (!token) return;
+      const response = await fetch("/api/admin/creator-accounts", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const result = await response.json() as { accounts?: CreatorAccount[]; error?: string };
+      if (cancelled) return;
+      if (!response.ok) { setError(result.error ?? "Could not load creator accounts."); return; }
+      setCreatorAccounts(Object.fromEntries((result.accounts ?? []).map((account) => [account.creator_id, account])));
+    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not load creator accounts."));
+    return () => { cancelled = true; };
+  }, [supabase, role, creators]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadData(); }, 0);
@@ -175,6 +238,27 @@ export default function Dashboard() {
     finally { setBusy(false); }
   };
 
+  const creatorAccountAction = async (payload: { action: string; creatorId: string; email?: string; active?: boolean }) => {
+    if (!supabase) throw new Error("Supabase is not configured.");
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error("Your session has expired. Sign in again.");
+    const response = await fetch("/api/admin/creator-accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json() as { message?: string; error?: string };
+    if (!response.ok) throw new Error(result.error ?? "Creator account action failed.");
+    setNotice(result.message ?? "Creator account updated.");
+    await loadData();
+  };
+  const runCreatorAccountAction = async (payload: { action: string; creatorId: string; email?: string; active?: boolean }) => {
+    setBusy(true); setError(""); setNotice("");
+    try { await creatorAccountAction(payload); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Creator account action failed."); }
+    finally { setBusy(false); }
+  };
+
   const signIn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabase) return;
@@ -188,6 +272,7 @@ export default function Dashboard() {
   };
 
   const openCreator = (creator?: Creator) => {
+    setInviteLogin(false);
     setEditing(creator ?? null);
     setCreatorDraft(creator ? {
       name: creator.name, email: creator.email, phone: creator.phone ?? "", platform: creator.platform ?? "",
@@ -205,9 +290,34 @@ export default function Dashboard() {
     };
     const result = editing
       ? await supabase.from("creators").update(payload).eq("id", editing.id)
-      : await supabase.from("creators").insert(payload);
+      : await supabase.from("creators").insert({ ...payload, dashboard_permissions: defaultPermissions }).select("id").single();
     if (result.error) setError(result.error.message);
-    else { setCreatorModal(false); setNotice(editing ? "Creator updated." : "Creator added and referral link generated."); await loadData(); }
+    else {
+      setCreatorModal(false);
+      setNotice(editing ? "Creator updated." : "Creator added and referral link generated.");
+      if (editing && editing.email !== payload.email && editing.auth_user_id) {
+        await runCreatorAccountAction({ action: "update-email", creatorId: editing.id, email: payload.email });
+      }
+      await loadData();
+      if (!editing && inviteLogin && "data" in result && result.data) {
+        try { await creatorAccountAction({ action: "invite", creatorId: result.data.id as string }); }
+        catch (reason) { setError(reason instanceof Error ? `Creator was created, but the invitation failed: ${reason.message}` : "Creator was created, but the invitation failed."); }
+      }
+      setInviteLogin(false);
+    }
+  };
+
+  const savePermissions = async (creator: Creator, nextPermissions: DashboardPermissions) => {
+    if (!supabase) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const { error: permissionError } = await supabase.from("creators").update({ dashboard_permissions: nextPermissions }).eq("id", creator.id);
+      if (permissionError) throw permissionError;
+      setNotice("Dashboard permissions saved.");
+      setPermissionsCreator(null);
+      await loadData();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save dashboard permissions."); }
+    finally { setBusy(false); }
   };
 
   const filteredLeads = useMemo(() => leads.filter((lead) => {
@@ -219,8 +329,12 @@ export default function Dashboard() {
   const totals = useMemo(() => ({
     creators: creators.filter((creator) => creator.is_active).length,
     leads: leads.length,
+    creatorLeads: leads.filter((lead) => lead.creator_id !== null).length,
+    directLeads: leads.filter((lead) => lead.creator_id === null).length,
     qualified: leads.filter((lead) => lead.status === "Qualified").length,
     converted: leads.filter((lead) => lead.status === "Converted").length,
+    creatorConverted: leads.filter((lead) => lead.creator_id !== null && lead.status === "Converted").length,
+    directConverted: leads.filter((lead) => lead.creator_id === null && lead.status === "Converted").length,
     revenue: leads.filter((lead) => lead.status === "Converted").reduce((sum, lead) => sum + Number(lead.revenue_amount || 0), 0),
     commission: commissions.reduce((sum, commission) => sum + Number(commission.amount), 0),
     pending: commissions.filter((commission) => commission.status !== "paid").reduce((sum, commission) => sum + Number(commission.amount), 0),
@@ -270,6 +384,8 @@ export default function Dashboard() {
   if (authLoading) return <div className="grid min-h-screen place-items-center text-slate-500"><LoaderCircle className="animate-spin" /></div>;
   if (!user) return <AuthScreen email={email} setEmail={setEmail} password={password} setPassword={setPassword} signup={signup} setSignup={setSignup} signIn={signIn} busy={busy} error={error} notice={notice} migrationRequired={migrationRequired} />;
 
+  if (role === "creator") return <div className="grid min-h-screen place-items-center text-slate-500"><LoaderCircle className="animate-spin" /> Redirecting to creator dashboard…</div>;
+  if (role !== "admin") return <div className="grid min-h-screen place-items-center p-6"><div className="max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center"><h1 className="font-semibold text-slate-900">Admin access required</h1><p className="mt-2 text-sm text-slate-500">This account is not authorized to access the business dashboard.</p><button className="btn-secondary mt-4" onClick={async () => { await supabase.auth.signOut(); }}>Sign out</button></div></div>;
   return (
     <div className="min-h-screen md:flex">
       {mobileNav && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-slate-950/40 md:hidden" onClick={() => setMobileNav(false)} />}
@@ -307,7 +423,7 @@ export default function Dashboard() {
           {notice && <div role="status" className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
           {loading && <div className="mb-4 flex items-center gap-2 text-xs text-slate-400"><LoaderCircle size={14} className="animate-spin" />Syncing workspace data…</div>}
           {view === "Overview" && <Overview totals={totals} creators={creators} leads={leads} creatorPerformance={creatorPerformance} monthlyData={monthlyData} pieData={pieData} setView={setView} />}
-          {view === "Creators" && <CreatorsView creators={creators} leads={leads} commissions={commissions} openCreator={openCreator} action={action} supabase={supabase} copyLink={copyLink} referralUrl={referralUrl} />}
+          {view === "Creators" && <CreatorsView creators={creators} leads={leads} commissions={commissions} accounts={creatorAccounts} openCreator={openCreator} copyLink={copyLink} referralUrl={referralUrl} openPermissions={setPermissionsCreator} openProfile={setProfileCreator} accountAction={runCreatorAccountAction} />}
           {view === "Referral Links" && <LinksView creators={creators} links={links} integration={integration} referralUrl={referralUrl} copyUrl={copyUrl} supabase={supabase} action={action} />}
           {view === "Leads" && <LeadsView leads={filteredLeads} allLeads={leads} creators={creators} search={search} setSearch={setSearch} leadStatus={leadStatus} setLeadStatus={setLeadStatus} leadSource={leadSource} setLeadSource={setLeadSource} leadSort={leadSort} setLeadSort={setLeadSort} exportLeads={exportLeads} action={action} supabase={supabase} />}
           {view === "Conversions" && <ConversionsView leads={leads.filter((lead) => lead.status === "Converted")} creators={creators} action={action} supabase={supabase} />}
@@ -331,9 +447,12 @@ export default function Dashboard() {
             <Field label="Commission model"><select value={creatorDraft.commission_model} onChange={(e) => setCreatorDraft({ ...creatorDraft, commission_model: e.target.value as CommissionModel })} className="input"><option value="qualified_lead">Per qualified lead</option><option value="sale_fixed">Per successful sale</option><option value="sale_percent">% of successful sale</option></select></Field>
             <Field label={creatorDraft.commission_model === "sale_percent" ? "Commission percentage" : "Commission amount (INR)"}><input type="number" min="0" step="0.01" required value={creatorDraft.commission_value} onChange={(e) => setCreatorDraft({ ...creatorDraft, commission_value: e.target.value })} className="input" /></Field>
           </div>
-          <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={() => setCreatorModal(false)} className="btn-secondary">Cancel</button><button disabled={busy} className="btn-primary">{busy ? "Saving…" : editing ? "Save changes" : "Add creator"}</button></div>
+          {!editing && <label className="mt-4 flex items-start gap-2 rounded-lg bg-blue-50 p-3 text-xs text-blue-900"><input type="checkbox" checked={inviteLogin} onChange={(event) => setInviteLogin(event.target.checked)} className="mt-0.5" /><span><strong>Create creator login and send invitation</strong><span className="mt-1 block text-blue-700">Supabase sends a secure account setup link. Passwords are never stored by CreatorTrack.</span></span></label>}
+          <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={() => { setCreatorModal(false); setInviteLogin(false); }} className="btn-secondary">Cancel</button><button disabled={busy} className="btn-primary">{busy ? "Saving…" : editing ? "Save changes" : "Add creator"}</button></div>
         </form>
       </div>}
+      {permissionsCreator && <PermissionsModal creator={permissionsCreator} onClose={() => setPermissionsCreator(null)} onSave={savePermissions} busy={busy} />}
+      {profileCreator && <CreatorProfileModal creator={profileCreator} account={creatorAccounts[profileCreator.id]} leads={leads.filter((lead) => lead.creator_id === profileCreator.id)} commissions={commissions.filter((item) => item.creator_id === profileCreator.id)} payments={payments.filter((item) => item.creator_id === profileCreator.id)} clicks={links.filter((link) => link.creator_id === profileCreator.id).reduce((sum, link) => sum + Number(link.click_count ?? 0), 0)} referralUrl={referralUrl(profileCreator.referral_code)} onClose={() => setProfileCreator(null)} onEdit={() => { setProfileCreator(null); openCreator(profileCreator); }} onManagePermissions={() => { setProfileCreator(null); setPermissionsCreator(profileCreator); }} onAccountAction={(payload) => { setProfileCreator(null); void runCreatorAccountAction(payload); }} />}
     </div>
   );
 }
@@ -350,7 +469,7 @@ function AuthScreen({ email, setEmail, password, setPassword, signup, setSignup,
   return <main className="grid min-h-screen place-items-center bg-[#f7f8fb] p-5"><div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
     <div className="mb-7 flex items-center gap-3"><div className="grid h-11 w-11 place-items-center rounded-xl bg-blue-600 text-white"><Activity /></div><div><h1 className="text-xl font-bold">CreatorTrack</h1><p className="text-xs text-slate-500">Creator referral management</p></div></div>
     <h2 className="text-lg font-semibold">{signup ? "Create your admin account" : "Welcome back"}</h2><p className="mt-1 text-sm text-slate-500">{signup ? "The first account created becomes the workspace admin." : "Sign in to manage your creator program."}</p>
-    {migrationRequired && <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">Supabase is reachable, but the CreatorTrack database schema is missing. Apply <code>supabase/migrations/202611110001_creatortrack.sql</code> in the Supabase SQL Editor, then reload before creating the admin account.</div>}
+    {migrationRequired && <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">Supabase is reachable, but the CreatorTrack database schema is missing. Apply the base migration and then <code>supabase/migrations/202611130001_creator_portal_permissions.sql</code> in the Supabase SQL Editor, then reload before creating the admin account.</div>}
     <form onSubmit={signIn} className="mt-6 space-y-4"><Field label="Email"><input className="input" required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field><Field label="Password"><input className="input" required minLength={8} type="password" autoComplete={signup ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} /></Field>{error && <p role="alert" className="text-sm text-rose-600">{error}</p>}{notice && <p role="status" className="text-sm text-emerald-700">{notice}</p>}<button disabled={busy || (signup && migrationRequired)} className="btn-primary w-full">{busy ? "Please wait…" : signup ? "Create account" : "Sign in"}</button></form>
     <button className="mt-4 w-full text-center text-sm font-medium text-blue-700 hover:underline" onClick={() => setSignup(!signup)}>{signup ? "Already have an account? Sign in" : "New to CreatorTrack? Create the admin account"}</button>
   </div></main>;
@@ -367,18 +486,32 @@ function Panel({ title, action, children, className = "" }: { title: string; act
 }
 function Empty({ title, description }: { title: string; description: string }) { return <div className="grid min-h-40 place-items-center text-center"><div><div className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-400"><ClipboardList size={18} /></div><p className="text-sm font-medium text-slate-700">{title}</p><p className="mt-1 text-xs text-slate-400">{description}</p></div></div>; }
 function Overview({ totals, creators, leads, creatorPerformance, monthlyData, pieData, setView }: {
-  totals: { creators: number; leads: number; qualified: number; converted: number; revenue: number; commission: number; pending: number };
+  totals: { creators: number; leads: number; creatorLeads: number; directLeads: number; qualified: number; converted: number; creatorConverted: number; directConverted: number; revenue: number; commission: number; pending: number };
   creators: Creator[]; leads: Lead[]; creatorPerformance: { id: string; name: string; leads: number; conversions: number; revenue: number }[];
   monthlyData: MonthlyPerformance[]; pieData: { name: string; value: number }[]; setView: (view: View) => void;
 }) {
   return <>
     <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-xs font-medium uppercase tracking-wide text-blue-600">Performance overview</p><h1 className="mt-1 text-[25px] font-bold tracking-tight text-slate-900">Good to see you</h1><p className="mt-1 text-sm text-slate-500">Here’s how your creator program is performing.</p></div><button onClick={() => setView("Creators")} className="btn-primary"><Plus size={16} /> Add creator</button></div>
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4"><MetricCard title="Total creators" value={totals.creators} detail="Active partners" icon={Users} /><MetricCard title="Total leads" value={totals.leads} detail="All-time referrals" icon={ClipboardList} tone="purple" /><MetricCard title="Qualified leads" value={totals.qualified} detail="Ready for follow-up" icon={Check} tone="green" /><MetricCard title="Converted customers" value={totals.converted} detail="Successful sales" icon={ArrowUpRight} tone="amber" /><MetricCard title="Total revenue" value={formatMoney(totals.revenue)} detail="From converted customers" icon={ShoppingBag} tone="green" /><MetricCard title="Total commission" value={formatMoney(totals.commission)} detail="Earned by creators" icon={CircleDollarSign} tone="purple" /><MetricCard title="Pending payments" value={formatMoney(totals.pending)} detail="Awaiting payment" icon={CreditCard} tone="amber" /><MetricCard title="Conversion rate" value={`${totals.leads ? ((totals.converted / totals.leads) * 100).toFixed(1) : "0.0"}%`} detail="Lead to customer" icon={BarChart3} /></div>
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <MetricCard title="Total creators" value={totals.creators} detail="Active partners" icon={Users} />
+      <MetricCard title="Total business leads" value={totals.leads} detail="Creator + direct, counted once" icon={ClipboardList} tone="purple" />
+      <MetricCard title="Total creator leads" value={totals.creatorLeads} detail="Attributed to creators" icon={Users} tone="blue" />
+      <MetricCard title="Total direct leads" value={totals.directLeads} detail="No valid creator attribution" icon={ClipboardList} />
+      <MetricCard title="Total completed clients" value={totals.converted} detail="All successful sales" icon={ArrowUpRight} tone="amber" />
+      <MetricCard title="Creator completed clients" value={totals.creatorConverted} detail="Creator-attributed sales" icon={Users} tone="green" />
+      <MetricCard title="Direct completed clients" value={totals.directConverted} detail="Direct sales" icon={ShoppingBag} />
+      <MetricCard title="Qualified leads" value={totals.qualified} detail="Ready for follow-up" icon={Check} tone="green" />
+      <MetricCard title="Total revenue" value={formatMoney(totals.revenue)} detail="From converted customers" icon={ShoppingBag} tone="green" />
+      <MetricCard title="Total creator commission" value={formatMoney(totals.commission)} detail="Earned by creators" icon={CircleDollarSign} tone="purple" />
+      <MetricCard title="Pending payments" value={formatMoney(totals.pending)} detail="Awaiting payment" icon={CreditCard} tone="amber" />
+      <MetricCard title="Conversion rate" value={`${totals.leads ? ((totals.converted / totals.leads) * 100).toFixed(1) : "0.0"}%`} detail="Lead to customer" icon={BarChart3} />
+    </div>
     <div className="mt-5 grid gap-5 xl:grid-cols-[1.65fr_1fr]">
       <Panel title="Creator performance" action={<button onClick={() => setView("Analytics")} className="text-xs font-medium text-blue-600">View analytics <ArrowUpRight size={13} className="inline" /></button>}>{creatorPerformance.length ? <div className="h-[270px] w-full"><ResponsiveContainer width="100%" height="100%"><BarChart data={creatorPerformance} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}><CartesianGrid stroke="#eef1f6" vertical={false} /><XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} /><YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} /><Tooltip /><Bar dataKey="leads" fill={blue} radius={[5, 5, 0, 0]} /><Bar dataKey="conversions" fill="#34d399" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div> : <Empty title="No creator activity yet" description="Add creators and share their referral links to see performance." />}</Panel>
       <Panel title="Lead conversion"><div className="relative h-[225px]">{totals.leads ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieData} dataKey="value" nameKey="name" innerRadius={66} outerRadius={88} paddingAngle={4}><Cell fill="#2563eb" /><Cell fill="#e2e8f0" /></Pie><Tooltip /></PieChart></ResponsiveContainer> : <Empty title="No leads yet" description="Leads will appear here after form submissions." />}{Boolean(totals.leads) && <div className="pointer-events-none absolute inset-0 grid place-items-center"><div className="text-center"><div className="text-xl font-bold">{((totals.converted / totals.leads) * 100).toFixed(0)}%</div><div className="text-[10px] text-slate-400">converted</div></div></div>}</div><div className="flex justify-center gap-5 text-xs"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-blue-600" />Converted ({totals.converted})</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-slate-200" />Other ({totals.leads - totals.converted})</span></div></Panel>
       <Panel title="Leads and conversions over time" className="xl:col-span-2"><div className="h-[250px]"><ResponsiveContainer width="100%" height="100%"><LineChart data={monthlyData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}><CartesianGrid stroke="#eef1f6" vertical={false} /><XAxis dataKey="month" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} /><YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} /><Tooltip /><Line type="monotone" dataKey="leads" stroke={blue} strokeWidth={2.5} dot={{ fill: blue, r: 4 }} activeDot={{ r: 6 }} /><Line type="monotone" dataKey="conversions" stroke="#34d399" strokeWidth={2.5} dot={{ fill: "#34d399", r: 4 }} /></LineChart></ResponsiveContainer></div></Panel>
       <Panel title="Recent leads" action={<button onClick={() => setView("Leads")} className="text-xs font-medium text-blue-600">View all <ArrowUpRight size={13} className="inline" /></button>} className="xl:col-span-2"><RecentLeads leads={leads.slice(0, 5)} creators={creators} /></Panel>
+      <Panel title="Creator vs direct performance" className="xl:col-span-2"><div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]"><div className="h-[240px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={[{ name: "Leads", Creators: totals.creatorLeads, Direct: totals.directLeads }, { name: "Completed clients", Creators: totals.creatorConverted, Direct: totals.directConverted }]} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}><CartesianGrid stroke="#eef1f6" vertical={false} /><XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} /><YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} /><Tooltip /><Bar dataKey="Creators" fill={blue} radius={[5, 5, 0, 0]} /><Bar dataKey="Direct" fill="#34d399" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div><div className="space-y-3 self-center text-sm"><div className="flex justify-between gap-4"><span className="text-slate-500">Creator lead-to-sale conversion</span><strong>{totals.creatorLeads ? (totals.creatorConverted / totals.creatorLeads * 100).toFixed(1) : "0.0"}%</strong></div><div className="flex justify-between gap-4"><span className="text-slate-500">Direct lead-to-sale conversion</span><strong>{totals.directLeads ? (totals.directConverted / totals.directLeads * 100).toFixed(1) : "0.0"}%</strong></div></div></div></Panel>
     </div>
   </>;
 }
@@ -390,17 +523,92 @@ function StatusBadge({ status }: { status: string }) {
   const style: Record<string, string> = { New: "bg-blue-50 text-blue-700", Contacted: "bg-violet-50 text-violet-700", Qualified: "bg-amber-50 text-amber-700", Converted: "bg-emerald-50 text-emerald-700", Rejected: "bg-rose-50 text-rose-700", pending: "bg-amber-50 text-amber-700", approved: "bg-blue-50 text-blue-700", paid: "bg-emerald-50 text-emerald-700" };
   return <span className={classNames("inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold", style[status] ?? "bg-slate-100 text-slate-600")}>{status}</span>;
 }
-function CreatorsView({ creators, leads, commissions, openCreator, action, supabase, copyLink, referralUrl }: {
-  creators: Creator[]; leads: Lead[]; commissions: Commission[]; openCreator: (creator?: Creator) => void;
-  action: (operation: DbOperation, success: string) => Promise<void>;
-  supabase: NonNullable<ReturnType<typeof getSupabase>>; copyLink: (code: string) => void; referralUrl: (code: string) => string;
+function CreatorsView({ creators, leads, commissions, accounts, openCreator, copyLink, referralUrl, openPermissions, openProfile, accountAction }: {
+  creators: Creator[]; leads: Lead[]; commissions: Commission[]; accounts: Record<string, CreatorAccount>;
+  openCreator: (creator?: Creator) => void; openPermissions: (creator: Creator) => void; openProfile: (creator: Creator) => void;
+  accountAction: (payload: { action: string; creatorId: string; email?: string; active?: boolean }) => Promise<void>;
+  copyLink: (code: string) => void; referralUrl: (code: string) => string;
 }) {
-  return <><PageTitle title="Creators" description="Manage creators, their referral details, and commission rules." action={<button onClick={() => openCreator()} className="btn-primary"><Plus size={16} /> Add creator</button>} />
+  return <><PageTitle title="Creators" description="Manage creators, their referral details, commission rules, and portal access." action={<button onClick={() => openCreator()} className="btn-primary"><Plus size={16} /> Add creator</button>} />
     <div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniStat title="Total creators" value={creators.length} /><MiniStat title="Active creators" value={creators.filter((item) => item.is_active).length} /><MiniStat title="Earned commission" value={formatMoney(commissions.reduce((sum, item) => sum + Number(item.amount), 0))} /></div>
-    <Panel title="Creator directory">{creators.length ? <div className="overflow-x-auto"><table className="w-full min-w-[800px] text-left text-xs"><thead className="text-[10px] uppercase tracking-wide text-slate-400"><tr>{["Creator", "Referral code", "Leads", "Commission rule", "Status", "Actions"].map((item) => <th key={item} className="pb-3 font-medium">{item}</th>)}</tr></thead><tbody>{creators.map((creator) => <tr key={creator.id} className="border-t border-slate-100"><td className="py-3"><div className="font-semibold text-slate-800">{creator.name}</div><div className="mt-1 text-slate-400">{creator.email}{creator.platform ? ` · ${creator.platform}` : ""}</div></td><td className="py-3 font-mono text-blue-700">{creator.referral_code}</td><td className="py-3 font-medium">{leads.filter((lead) => lead.creator_id === creator.id).length}</td><td className="py-3 text-slate-600">{creator.commission_model === "qualified_lead" ? `${formatMoney(creator.commission_value)} / qualified lead` : creator.commission_model === "sale_fixed" ? `${formatMoney(creator.commission_value)} / sale` : `${creator.commission_value}% / sale`}</td><td className="py-3"><StatusBadge status={creator.is_active ? "Active" : "Inactive"} /></td><td className="py-3"><div className="flex gap-1"><button title="Copy referral link" className="icon-btn" onClick={() => copyLink(creator.referral_code)}><Copy size={15} /></button><a title="Open referral form" className="icon-btn" href={referralUrl(creator.referral_code)} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a><button title="Edit creator" className="icon-btn" onClick={() => openCreator(creator)}><Settings size={15} /></button><button title={creator.is_active ? "Deactivate creator" : "Activate creator"} className="icon-btn" onClick={() => void action(() => supabase.from("creators").update({ is_active: !creator.is_active }).eq("id", creator.id), `Creator ${creator.is_active ? "deactivated" : "activated"}.`)}>{creator.is_active ? <X size={15} /> : <Check size={15} />}</button></div></td></tr>)}</tbody></table></div> : <Empty title="No creators yet" description="Add your first creator to generate a unique referral code and link." />}</Panel>
+    <Panel title="Creator directory">{creators.length ? <div className="overflow-x-auto"><table className="w-full min-w-[1120px] text-left text-xs"><thead className="text-[10px] uppercase tracking-wide text-slate-400"><tr>{["Creator", "Referral code", "Leads", "Commission rule", "Status", "Portal account", "Actions"].map((item) => <th key={item} className="pb-3 font-medium">{item}</th>)}</tr></thead><tbody>{creators.map((creator) => {
+      const account = accounts[creator.id];
+      return <tr key={creator.id} className="border-t border-slate-100"><td className="py-3"><div className="font-semibold text-slate-800">{creator.name}</div><div className="mt-1 text-slate-400">{creator.email}{creator.platform ? ` · ${creator.platform}` : ""}</div></td><td className="py-3 font-mono text-blue-700">{creator.referral_code}</td><td className="py-3 font-medium">{leads.filter((lead) => lead.creator_id === creator.id).length}</td><td className="py-3 text-slate-600">{creator.commission_model === "qualified_lead" ? `${formatMoney(creator.commission_value)} / qualified lead` : creator.commission_model === "sale_fixed" ? `${formatMoney(creator.commission_value)} / sale` : `${creator.commission_value}% / sale`}</td><td className="py-3"><StatusBadge status={creator.is_active ? "Active" : "Inactive"} /></td><td className="py-3"><div>{account?.linked ? <StatusBadge status={account.active ? "Active" : "Inactive"} /> : <span className="text-slate-400">Not invited</span>}</div><div className="mt-1 text-[10px] text-slate-400">{account?.last_sign_in_at ? `Last login ${new Date(account.last_sign_in_at).toLocaleDateString()}` : account?.linked ? "Never logged in" : "—"}</div></td><td className="py-3"><div className="flex gap-1">
+        <button title="View creator profile" className="icon-btn" onClick={() => openProfile(creator)}><Eye size={15} /></button>
+        <button title="Copy referral link" className="icon-btn" onClick={() => copyLink(creator.referral_code)}><Copy size={15} /></button>
+        <a title="Open referral form" className="icon-btn" href={referralUrl(creator.referral_code)} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>
+        <button title="Edit creator" className="icon-btn" onClick={() => openCreator(creator)}><Settings size={15} /></button>
+        <button title="Manage dashboard access" className="icon-btn" onClick={() => openPermissions(creator)}><SlidersHorizontal size={15} /></button>
+        {account?.linked ? <><button title="Send password reset link" className="icon-btn" onClick={() => void accountAction({ action: "reset-password", creatorId: creator.id })}><KeyRound size={15} /></button><button title={creator.is_active ? "Deactivate creator account" : "Activate creator account"} className="icon-btn" onClick={() => void accountAction({ action: "set-active", creatorId: creator.id, active: !creator.is_active })}>{creator.is_active ? <X size={15} /> : <Check size={15} />}</button></>
+          : <button title="Send creator account invitation" className="icon-btn" onClick={() => void accountAction({ action: "invite", creatorId: creator.id })}><MailPlus size={15} /></button>}
+      </div></td></tr>;
+    })}</tbody></table></div> : <Empty title="No creators yet" description="Add your first creator to generate a unique referral code and link." />}</Panel>
   </>;
 }
-function MiniStat({ title, value }: { title: string; value: string | number }) { return <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">{title}</p><p className="mt-2 text-xl font-bold text-slate-900">{value}</p></div>; }
+function PermissionsModal({ creator, onClose, onSave, busy }: { creator: Creator; onClose: () => void; onSave: (creator: Creator, permissions: DashboardPermissions) => Promise<void>; busy: boolean }) {
+  const [permissions, setPermissions] = useState<DashboardPermissions>(() => ({
+    ...defaultPermissions,
+    ...Object.fromEntries(permissionOptions.map(({ key }) => [key, creator.dashboard_permissions?.[key] === true])),
+  }));
+  return <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="permissions-title" className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+      <div className="mb-5 flex items-start justify-between"><div><h2 id="permissions-title" className="text-lg font-semibold">Manage dashboard access</h2><p className="mt-1 text-sm text-slate-500">{creator.name} · Changes apply to the creator dashboard immediately.</p></div><button onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100" aria-label="Close permissions"><X size={18} /></button></div>
+      <div className="grid gap-2 sm:grid-cols-2">{permissionOptions.map(({ key, label }) => <label key={key} className="flex items-center gap-3 rounded-lg border border-slate-100 px-3 py-2.5 text-sm text-slate-700"><input type="checkbox" checked={permissions[key]} onChange={(event) => setPermissions((current) => ({ ...current, [key]: event.target.checked }))} className="h-4 w-4 accent-blue-600" />{label}</label>)}</div>
+      <div className="mt-5 flex justify-end gap-2"><button onClick={onClose} className="btn-secondary">Cancel</button><button disabled={busy} onClick={() => void onSave(creator, permissions)} className="btn-primary"><Check size={15} />{busy ? "Saving…" : "Save permissions"}</button></div>
+    </section>
+  </div>;
+}
+
+function CreatorProfileModal({ creator, account, leads, commissions, payments, clicks, referralUrl, onClose, onEdit, onManagePermissions, onAccountAction }: {
+  creator: Creator; account?: CreatorAccount; leads: Lead[]; commissions: Commission[]; payments: Payment[];
+  clicks: number; referralUrl: string; onClose: () => void;
+  onEdit: () => void; onManagePermissions: () => void;
+  onAccountAction: (payload: { action: string; creatorId: string; active?: boolean }) => void;
+}) {
+  const [preview, setPreview] = useState(false);
+  const totalCommission = commissions.reduce((sum, item) => sum + Number(item.amount), 0);
+  const allowed = (key: DashboardPermissionKey) => creator.dashboard_permissions?.[key] === true;
+  return <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="creator-profile-title" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+      <div className="mb-5 flex items-start justify-between"><div><h2 id="creator-profile-title" className="text-lg font-semibold">{creator.name}</h2><p className="mt-1 text-sm text-slate-500">Creator profile and portal account</p></div><button onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100" aria-label="Close creator profile"><X size={18} /></button></div>
+      <div className="mb-4 flex flex-wrap gap-2"><button onClick={onEdit} className="btn-secondary"><Settings size={14} /> Edit creator</button><button onClick={onManagePermissions} className="btn-secondary"><SlidersHorizontal size={14} /> Manage permissions</button>
+        {account?.linked ? <><button onClick={() => onAccountAction({ action: "reset-password", creatorId: creator.id })} className="btn-secondary"><KeyRound size={14} /> Reset password</button><button onClick={() => onAccountAction({ action: "set-active", creatorId: creator.id, active: !creator.is_active })} className="btn-secondary">{creator.is_active ? "Deactivate account" : "Activate account"}</button></>
+          : <button onClick={() => onAccountAction({ action: "invite", creatorId: creator.id })} className="btn-secondary"><MailPlus size={14} /> Send invitation</button>}
+      </div>
+      <button onClick={() => setPreview((value) => !value)} className="btn-secondary mb-4"><Eye size={14} />{preview ? "Hide creator dashboard preview" : "View creator dashboard"}</button>
+      {preview && <div className="mb-5 rounded-xl border border-blue-100 bg-slate-50 p-4"><h3 className="mb-3 text-sm font-semibold">Creator-facing dashboard preview</h3><div className="grid gap-2 sm:grid-cols-3">
+        {allowed("show_referral_link") && <MiniStat title="Referral link" value={<a href={referralUrl} target="_blank" rel="noreferrer" className="break-all text-xs text-blue-700 underline">Open link</a>} />}
+        {allowed("show_total_clicks") && <MiniStat title="Total clicks" value={clicks} />}
+        {allowed("show_total_leads") && <MiniStat title="Total leads" value={leads.length} />}
+        {allowed("show_qualified_leads") && <MiniStat title="Qualified leads" value={leads.filter((lead) => lead.status === "Qualified").length} />}
+        {allowed("show_completed_clients") && <MiniStat title="Completed clients" value={leads.filter((lead) => lead.status === "Converted").length} />}
+        {allowed("show_pending_clients") && <MiniStat title="Pending clients" value={leads.filter((lead) => ["New", "Contacted", "Qualified"].includes(lead.status)).length} />}
+        {allowed("show_rejected_leads") && <MiniStat title="Rejected leads" value={leads.filter((lead) => lead.status === "Rejected").length} />}
+        {allowed("show_conversion_rate") && <MiniStat title="Conversion rate" value={`${leads.length ? (leads.filter((lead) => lead.status === "Converted").length / leads.length * 100).toFixed(1) : "0.0"}%`} />}
+        {allowed("show_commission_earned") && <MiniStat title="Commission earned" value={formatMoney(totalCommission)} />}
+        {allowed("show_pending_commission") && <MiniStat title="Pending commission" value={formatMoney(commissions.filter((item) => item.status !== "paid").reduce((sum, item) => sum + Number(item.amount), 0))} />}
+        {allowed("show_paid_commission") && <MiniStat title="Paid commission" value={formatMoney(commissions.filter((item) => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0))} />}
+      </div>
+        {allowed("show_recent_activity") && <div className="mt-3 text-xs text-slate-600">Recent activity shows lead status and date only; it never includes customer details.</div>}
+        {allowed("show_payment_history") && <div className="mt-3 text-xs text-slate-600">Payment history is enabled ({payments.length} recorded payments).</div>}
+        {allowed("show_lead_performance_chart") && <div className="mt-3 text-xs text-slate-600">Lead performance chart is enabled.</div>}
+        {allowed("show_monthly_performance") && <div className="mt-3 text-xs text-slate-600">Monthly performance is enabled.</div>}
+        {!permissionOptions.some(({ key }) => allowed(key)) && <p className="text-sm text-slate-500">No dashboard data is enabled for this creator.</p>}
+      </div>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <MiniStat title="Email" value={account?.email ?? creator.email} /><MiniStat title="Portal account" value={account?.linked ? account.active ? "Active" : "Inactive" : "Not invited"} />
+        <MiniStat title="Referral code" value={creator.referral_code} /><MiniStat title="Referral link" value={<a href={referralUrl} target="_blank" rel="noreferrer" className="break-all text-sm font-medium text-blue-700 underline">Open referral link</a>} />
+        <MiniStat title="Total clicks" value={clicks} /><MiniStat title="Total leads" value={leads.length} />
+        <MiniStat title="Completed clients" value={leads.filter((lead) => lead.status === "Converted").length} /><MiniStat title="Total earned commission" value={formatMoney(totalCommission)} />
+      </div>
+      <div className="mt-5 rounded-xl border border-slate-200 p-4"><h3 className="text-sm font-semibold">Commission details</h3><p className="mt-2 text-sm text-slate-600">{creator.commission_model === "qualified_lead" ? `${formatMoney(creator.commission_value)} per qualified lead` : creator.commission_model === "sale_fixed" ? `${formatMoney(creator.commission_value)} per successful sale` : `${creator.commission_value}% per successful sale`}</p><p className="mt-1 text-xs text-slate-500">{creator.platform ?? "Platform not set"}{creator.profile_url ? ` · ${creator.profile_url}` : ""}{creator.phone ? ` · ${creator.phone}` : ""}</p></div>
+      <div className="mt-5 rounded-xl border border-slate-200 p-4"><h3 className="text-sm font-semibold">Dashboard permissions</h3><div className="mt-3 flex flex-wrap gap-2">{permissionOptions.filter(({ key }) => creator.dashboard_permissions?.[key] === true).map(({ key, label }) => <span key={key} className="rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-700">{label.replace("Show ", "")}</span>)}{!permissionOptions.some(({ key }) => creator.dashboard_permissions?.[key] === true) && <span className="text-xs text-slate-400">No dashboard data enabled.</span>}</div></div>
+      <div className="mt-5 rounded-xl border border-slate-200 p-4"><h3 className="text-sm font-semibold">Payment history</h3>{payments.length ? <ul className="mt-3 divide-y divide-slate-100">{payments.map((payment) => <li key={payment.id} className="flex flex-wrap justify-between gap-2 py-2 text-xs"><span>{new Date(payment.payment_date).toLocaleDateString()} · {payment.method}{payment.transaction_reference ? ` · ${payment.transaction_reference}` : ""}</span><strong>{formatMoney(Number(payment.amount))}</strong></li>)}</ul> : <p className="mt-2 text-xs text-slate-400">No payments recorded.</p>}</div>
+    </section>
+  </div>;
+}
+
+function MiniStat({ title, value }: { title: string; value: React.ReactNode }) { return <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">{title}</p><div className="mt-2 break-words text-xl font-bold text-slate-900">{value}</div></div>; }
 
 function LinksView({ creators, links, integration, referralUrl, copyUrl, supabase, action }: {
   creators: Creator[]; links: Record<string, unknown>[]; integration: GoogleIntegration | null; referralUrl: (code: string) => string; copyUrl: (url: string) => void;

@@ -1,6 +1,6 @@
-import CreatorPortal from "@/components/creator-portal";
+import { redirect } from "next/navigation";
 
 export default function CreatorPage() {
-  return <CreatorPortal />;
+  redirect("/creator/login");
 }
 

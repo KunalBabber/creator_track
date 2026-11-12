@@ -9,7 +9,7 @@ const payloadSchema = z.object({
   productId: z.string().uuid().optional().or(z.literal("")),
   productName: z.string().trim().max(120).optional(),
   message: z.string().trim().max(2000).optional(),
-  referralCode: z.string().trim().min(3).max(64),
+  referralCode: z.string().trim().min(3).max(64).optional().or(z.literal("")),
   campaign: z.string().trim().max(120).optional(),
 });
 
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     }
     const { data, error } = await supabase.rpc("create_referral_lead", {
       p_customer_name: fields.customerName, p_email: fields.email.toLowerCase(), p_phone: fields.phone,
-      p_product_id: productId, p_message: fields.message || null, p_referral_code: fields.referralCode,
+      p_product_id: productId, p_message: fields.message || null, p_referral_code: fields.referralCode || null,
       p_campaign_name: fields.campaign || "Google Form", p_source: "Google Forms",
     });
     if (error) {
@@ -50,4 +50,3 @@ export async function POST(request: Request) {
     return Response.json({ error: "Webhook processing failed." }, { status: 503 });
   }
 }
-

@@ -13,8 +13,9 @@ CreatorTrack is a Next.js and Supabase creator referral dashboard. It supports c
 2. Copy `.env.example` to `.env.local` and set:
    - `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase publishable/anon key
+   - `SUPABASE_SERVICE_ROLE_KEY` — server-only key required for admin creator invitations and account controls; never prefix it with `NEXT_PUBLIC_`
    - `GOOGLE_FORMS_WEBHOOK_SECRET` — optional until Google Forms is connected; generate a long random value
-3. In Supabase SQL Editor, run [`supabase/migrations/202611110001_creatortrack.sql`](./supabase/migrations/202611110001_creatortrack.sql).
+3. In Supabase SQL Editor, apply [`supabase/migrations/202611110001_creatortrack.sql`](./supabase/migrations/202611110001_creatortrack.sql), then [`supabase/migrations/202611130001_creator_portal_permissions.sql`](./supabase/migrations/202611130001_creator_portal_permissions.sql), in order. The second migration is additive and retains existing records.
 4. Start the app: `npm run dev`
 5. Open `http://localhost:3000`, create the first account, and confirm the email if email confirmation is enabled. The first registered account becomes the workspace admin. Do not use the first-admin bootstrap on a public, untrusted deployment; create it in a controlled setup window.
 
@@ -52,28 +53,25 @@ Google Forms does **not** automatically persist arbitrary query parameters as an
 
 The webhook validates bearer authentication in constant time, validates every field on the server, verifies the active creator/campaign through the database function, rejects duplicate leads, and never accepts a creator ID from the caller. Keep the webhook secret private and rotate it in both `.env.local`/deployment secrets and Script Properties when needed.
 
-To grant a creator account access to one creator's own records, have that user create an account, then have an admin link the auth user to the creator in Supabase SQL Editor. The creator signs into `/creator` after linking:
+### Creator Portal and account permissions
 
-```sql
-update public.creators
-set auth_user_id = 'AUTH_USER_UUID'
-where id = 'CREATOR_UUID';
-
-update public.profiles
-set creator_id = 'CREATOR_UUID', role = 'creator'
-where id = 'AUTH_USER_UUID';
-```
-
-Row-level policies scope creator records to this association. The `/creator` portal shows that creator's links, click totals, leads, conversions, commissions, pending amount, and payment history. The admin interface remains at `/`.
+- The admin can create a creator login while adding the creator, send an invitation, trigger password-reset emails, change the account email, and activate or deactivate portal access from **Creators**. Creator passwords are set directly through Supabase Auth and are never stored in CreatorTrack.
+- Creators sign in at `/creator/login` and are redirected to `/creator/dashboard`. Invite and password-reset links return to the secure password setup flow on the login page.
+- Each creator's **Manage dashboard access** settings are stored on their creator record. The defaults expose only their referral link, total leads, and completed clients.
+- Creator dashboard statistics are served by a permission-filtered server-side database function. Customer names, emails, phone numbers, and internal notes are not returned. Direct table RLS also prevents creators from reading customer records, commissions, payments, click events, and referral-link records.
+- Admin invitation/account operations require `SUPABASE_SERVICE_ROLE_KEY` configured as a server-only environment variable in local development and the hosting provider. Rotate it if exposed. Admins should retain the service-role key only in secret configuration.
+- Leads without a valid creator referral are stored as direct leads. The admin overview separates creator-attributed and direct leads/conversions; total business metrics include both exactly once.
+- If an existing creator account was linked manually before this migration, preserve its `auth_user_id` and `profiles` association; no account relinking is needed.
 
 ## Production and security checklist
 
 - Use verified email and strong passwords; enable Supabase Auth rate limits and MFA for admins.
 - Set the webhook secret in the hosting provider's server-only environment configuration.
+- Set `SUPABASE_SERVICE_ROLE_KEY` server-side before using creator account invitation and management actions.
 - Configure HTTPS and an allowed redirect URL in Supabase Auth.
 - Apply RLS migration before adding real customer data. Review policies if extending tables or roles.
 - Back up the Supabase database and use Supabase logs to monitor webhook failures.
-- Creator role RLS limits database access. Test the `/creator` portal with a linked creator account before inviting partners.
+- Creator role RLS limits database access. Test creator login, permission changes, account deactivation, and the admin dashboard after applying both migrations.
 
 ## Validation
 

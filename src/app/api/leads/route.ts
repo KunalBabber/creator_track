@@ -7,7 +7,7 @@ const leadSchema = z.object({
   phone: z.string().trim().min(7).max(32),
   productId: z.string().uuid().optional().or(z.literal("")),
   message: z.string().trim().max(2000).optional(),
-  ref: z.string().trim().min(3).max(64),
+  ref: z.string().trim().min(3).max(64).optional().or(z.literal("")),
   campaign: z.string().trim().max(120).optional(),
 });
 
@@ -23,9 +23,9 @@ export async function POST(request: Request) {
       p_phone: fields.phone,
       p_product_id: fields.productId || null,
       p_message: fields.message || null,
-      p_referral_code: fields.ref,
+      p_referral_code: fields.ref || null,
       p_campaign_name: fields.campaign || "General",
-      p_source: "Referral form",
+      p_source: fields.ref ? "Referral form" : "Direct form",
     });
     if (error) {
       if (error.message.includes("duplicate lead")) return Response.json({ error: "A lead with this email or phone number has already been submitted." }, { status: 409 });
@@ -38,4 +38,3 @@ export async function POST(request: Request) {
     return Response.json({ error: "We could not submit your details. Please try again later." }, { status: 503 });
   }
 }
-
