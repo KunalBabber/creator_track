@@ -121,6 +121,10 @@ export default function Dashboard() {
   const [inviteLogin, setInviteLogin] = useState(false);
   const [permissionsCreator, setPermissionsCreator] = useState<Creator | null>(null);
   const [profileCreator, setProfileCreator] = useState<Creator | null>(null);
+  const [passwordCreator, setPasswordCreator] = useState<Creator | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [confirmTemporaryPassword, setConfirmTemporaryPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
   const [productName, setProductName] = useState("");
   const [productPrice, setProductPrice] = useState("");
   const [businessName, setBusinessName] = useState("Your business");
@@ -238,7 +242,7 @@ export default function Dashboard() {
     finally { setBusy(false); }
   };
 
-  const creatorAccountAction = async (payload: { action: string; creatorId: string; email?: string; active?: boolean }) => {
+  const creatorAccountAction = async (payload: { action: string; creatorId: string; email?: string; active?: boolean; password?: string }) => {
     if (!supabase) throw new Error("Supabase is not configured.");
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) throw new Error("Your session has expired. Sign in again.");
@@ -252,11 +256,54 @@ export default function Dashboard() {
     setNotice(result.message ?? "Creator account updated.");
     await loadData();
   };
-  const runCreatorAccountAction = async (payload: { action: string; creatorId: string; email?: string; active?: boolean }) => {
+  const runCreatorAccountAction = async (payload: { action: string; creatorId: string; email?: string; active?: boolean; password?: string }) => {
     setBusy(true); setError(""); setNotice("");
     try { await creatorAccountAction(payload); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Creator account action failed."); }
     finally { setBusy(false); }
+  };
+  const openSetPassword = (creator: Creator) => {
+    setTemporaryPassword("");
+    setConfirmTemporaryPassword("");
+    setPasswordError("");
+    setPasswordCreator(creator);
+    setProfileCreator(null);
+  };
+  const saveCreatorPassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!passwordCreator) return;
+    if (temporaryPassword.length < 12) { setPasswordError("Use at least 12 characters for the temporary password."); return; }
+    if (temporaryPassword !== confirmTemporaryPassword) { setPasswordError("The password confirmation does not match."); return; }
+    setBusy(true); setError(""); setNotice("");
+    setPasswordError("");
+    try {
+      await creatorAccountAction({ action: "set-password", creatorId: passwordCreator.id, password: temporaryPassword });
+      setPasswordCreator(null);
+      setTemporaryPassword("");
+      setConfirmTemporaryPassword("");
+    } catch (reason) {
+      setPasswordError(reason instanceof Error ? reason.message : "Could not update the creator password.");
+    } finally { setBusy(false); }
+  };
+  const generateTemporaryPassword = () => {
+    const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const lower = "abcdefghijkmnopqrstuvwxyz";
+    const digits = "23456789";
+    const symbols = "!@#$%_-";
+    const all = upper + lower + digits + symbols;
+    const random = new Uint32Array(48);
+    crypto.getRandomValues(random);
+    let cursor = 0;
+    const pick = (chars: string) => chars[random[cursor++] % chars.length];
+    const chars = [pick(upper), pick(lower), pick(digits), pick(symbols)];
+    for (let index = 4; index < 20; index++) chars.push(pick(all));
+    for (let index = chars.length - 1; index > 0; index--) {
+      const swapIndex = random[cursor++] % (index + 1);
+      [chars[index], chars[swapIndex]] = [chars[swapIndex], chars[index]];
+    }
+    const generated = chars.join("");
+    setTemporaryPassword(generated);
+    setConfirmTemporaryPassword(generated);
   };
 
   const signIn = async (event: FormEvent<HTMLFormElement>) => {
@@ -423,7 +470,7 @@ export default function Dashboard() {
           {notice && <div role="status" className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
           {loading && <div className="mb-4 flex items-center gap-2 text-xs text-slate-400"><LoaderCircle size={14} className="animate-spin" />Syncing workspace data…</div>}
           {view === "Overview" && <Overview totals={totals} creators={creators} leads={leads} creatorPerformance={creatorPerformance} monthlyData={monthlyData} pieData={pieData} setView={setView} />}
-          {view === "Creators" && <CreatorsView creators={creators} leads={leads} commissions={commissions} accounts={creatorAccounts} openCreator={openCreator} copyLink={copyLink} referralUrl={referralUrl} openPermissions={setPermissionsCreator} openProfile={setProfileCreator} accountAction={runCreatorAccountAction} />}
+          {view === "Creators" && <CreatorsView creators={creators} leads={leads} commissions={commissions} accounts={creatorAccounts} openCreator={openCreator} copyLink={copyLink} referralUrl={referralUrl} openPermissions={setPermissionsCreator} openProfile={setProfileCreator} openSetPassword={openSetPassword} accountAction={runCreatorAccountAction} />}
           {view === "Referral Links" && <LinksView creators={creators} links={links} integration={integration} referralUrl={referralUrl} copyUrl={copyUrl} supabase={supabase} action={action} />}
           {view === "Leads" && <LeadsView leads={filteredLeads} allLeads={leads} creators={creators} search={search} setSearch={setSearch} leadStatus={leadStatus} setLeadStatus={setLeadStatus} leadSource={leadSource} setLeadSource={setLeadSource} leadSort={leadSort} setLeadSort={setLeadSort} exportLeads={exportLeads} action={action} supabase={supabase} />}
           {view === "Conversions" && <ConversionsView leads={leads.filter((lead) => lead.status === "Converted")} creators={creators} action={action} supabase={supabase} />}
@@ -452,7 +499,8 @@ export default function Dashboard() {
         </form>
       </div>}
       {permissionsCreator && <PermissionsModal creator={permissionsCreator} onClose={() => setPermissionsCreator(null)} onSave={savePermissions} busy={busy} />}
-      {profileCreator && <CreatorProfileModal creator={profileCreator} account={creatorAccounts[profileCreator.id]} leads={leads.filter((lead) => lead.creator_id === profileCreator.id)} commissions={commissions.filter((item) => item.creator_id === profileCreator.id)} payments={payments.filter((item) => item.creator_id === profileCreator.id)} clicks={links.filter((link) => link.creator_id === profileCreator.id).reduce((sum, link) => sum + Number(link.click_count ?? 0), 0)} referralUrl={referralUrl(profileCreator.referral_code)} onClose={() => setProfileCreator(null)} onEdit={() => { setProfileCreator(null); openCreator(profileCreator); }} onManagePermissions={() => { setProfileCreator(null); setPermissionsCreator(profileCreator); }} onAccountAction={(payload) => { setProfileCreator(null); void runCreatorAccountAction(payload); }} />}
+      {profileCreator && <CreatorProfileModal creator={profileCreator} account={creatorAccounts[profileCreator.id]} leads={leads.filter((lead) => lead.creator_id === profileCreator.id)} commissions={commissions.filter((item) => item.creator_id === profileCreator.id)} payments={payments.filter((item) => item.creator_id === profileCreator.id)} clicks={links.filter((link) => link.creator_id === profileCreator.id).reduce((sum, link) => sum + Number(link.click_count ?? 0), 0)} referralUrl={referralUrl(profileCreator.referral_code)} onClose={() => setProfileCreator(null)} onEdit={() => { setProfileCreator(null); openCreator(profileCreator); }} onManagePermissions={() => { setProfileCreator(null); setPermissionsCreator(profileCreator); }} onAccountAction={(payload) => { setProfileCreator(null); void runCreatorAccountAction(payload); }} onSetPassword={() => openSetPassword(profileCreator)} />}
+      {passwordCreator && <SetCreatorPasswordModal creator={passwordCreator} password={temporaryPassword} setPassword={setTemporaryPassword} confirmPassword={confirmTemporaryPassword} setConfirmPassword={setConfirmTemporaryPassword} onGenerate={generateTemporaryPassword} onClose={() => { setPasswordCreator(null); setTemporaryPassword(""); setConfirmTemporaryPassword(""); setPasswordError(""); }} onSubmit={saveCreatorPassword} busy={busy} error={passwordError} />}
     </div>
   );
 }
@@ -523,10 +571,10 @@ function StatusBadge({ status }: { status: string }) {
   const style: Record<string, string> = { New: "bg-blue-50 text-blue-700", Contacted: "bg-violet-50 text-violet-700", Qualified: "bg-amber-50 text-amber-700", Converted: "bg-emerald-50 text-emerald-700", Rejected: "bg-rose-50 text-rose-700", pending: "bg-amber-50 text-amber-700", approved: "bg-blue-50 text-blue-700", paid: "bg-emerald-50 text-emerald-700" };
   return <span className={classNames("inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold", style[status] ?? "bg-slate-100 text-slate-600")}>{status}</span>;
 }
-function CreatorsView({ creators, leads, commissions, accounts, openCreator, copyLink, referralUrl, openPermissions, openProfile, accountAction }: {
+function CreatorsView({ creators, leads, commissions, accounts, openCreator, copyLink, referralUrl, openPermissions, openProfile, openSetPassword, accountAction }: {
   creators: Creator[]; leads: Lead[]; commissions: Commission[]; accounts: Record<string, CreatorAccount>;
-  openCreator: (creator?: Creator) => void; openPermissions: (creator: Creator) => void; openProfile: (creator: Creator) => void;
-  accountAction: (payload: { action: string; creatorId: string; email?: string; active?: boolean }) => Promise<void>;
+  openCreator: (creator?: Creator) => void; openPermissions: (creator: Creator) => void; openProfile: (creator: Creator) => void; openSetPassword: (creator: Creator) => void;
+  accountAction: (payload: { action: string; creatorId: string; email?: string; active?: boolean; password?: string }) => Promise<void>;
   copyLink: (code: string) => void; referralUrl: (code: string) => string;
 }) {
   return <><PageTitle title="Creators" description="Manage creators, their referral details, commission rules, and portal access." action={<button onClick={() => openCreator()} className="btn-primary"><Plus size={16} /> Add creator</button>} />
@@ -539,7 +587,7 @@ function CreatorsView({ creators, leads, commissions, accounts, openCreator, cop
         <a title="Open referral form" className="icon-btn" href={referralUrl(creator.referral_code)} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>
         <button title="Edit creator" className="icon-btn" onClick={() => openCreator(creator)}><Settings size={15} /></button>
         <button title="Manage dashboard access" className="icon-btn" onClick={() => openPermissions(creator)}><SlidersHorizontal size={15} /></button>
-        {account?.linked ? <><button title="Send password reset link" className="icon-btn" onClick={() => void accountAction({ action: "reset-password", creatorId: creator.id })}><KeyRound size={15} /></button><button title={creator.is_active ? "Deactivate creator account" : "Activate creator account"} className="icon-btn" onClick={() => void accountAction({ action: "set-active", creatorId: creator.id, active: !creator.is_active })}>{creator.is_active ? <X size={15} /> : <Check size={15} />}</button></>
+        {account?.linked ? <><button title="Set a new creator password" className="icon-btn" onClick={() => openSetPassword(creator)}><KeyRound size={15} /></button><button title="Send password reset link" className="icon-btn" onClick={() => void accountAction({ action: "reset-password", creatorId: creator.id })}><MailPlus size={15} /></button><button title={creator.is_active ? "Deactivate creator account" : "Activate creator account"} className="icon-btn" onClick={() => void accountAction({ action: "set-active", creatorId: creator.id, active: !creator.is_active })}>{creator.is_active ? <X size={15} /> : <Check size={15} />}</button></>
           : <button title="Send creator account invitation" className="icon-btn" onClick={() => void accountAction({ action: "invite", creatorId: creator.id })}><MailPlus size={15} /></button>}
       </div></td></tr>;
     })}</tbody></table></div> : <Empty title="No creators yet" description="Add your first creator to generate a unique referral code and link." />}</Panel>
@@ -559,11 +607,39 @@ function PermissionsModal({ creator, onClose, onSave, busy }: { creator: Creator
   </div>;
 }
 
-function CreatorProfileModal({ creator, account, leads, commissions, payments, clicks, referralUrl, onClose, onEdit, onManagePermissions, onAccountAction }: {
+function SetCreatorPasswordModal({ creator, password, setPassword, confirmPassword, setConfirmPassword, onGenerate, onClose, onSubmit, busy, error }: {
+  creator: Creator; password: string; setPassword: (value: string) => void; confirmPassword: string;
+  setConfirmPassword: (value: string) => void; onGenerate: () => void; onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void; busy: boolean; error: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyPassword = async () => {
+    try {
+      await navigator.clipboard.writeText(password);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <form onSubmit={onSubmit} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+      <div className="mb-5 flex items-start justify-between"><div><h2 className="text-lg font-semibold">Set a new password</h2><p className="mt-1 text-sm text-slate-500">Creator account: {creator.name}</p></div><button type="button" disabled={busy} onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100" aria-label="Close password dialog"><X size={18} /></button></div>
+      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">This immediately replaces the creator’s current password. CreatorTrack does not save it. Share it only through a secure channel, and ask the creator to change it after signing in.</div>
+      <div className="flex flex-wrap gap-2"><button type="button" onClick={onGenerate} className="btn-secondary"><KeyRound size={14} /> Generate secure password</button><button type="button" disabled={!password} onClick={() => void copyPassword()} className="btn-secondary"><Copy size={14} />{copied ? "Copied" : "Copy password"}</button></div>
+      <Field label="New password"><input required minLength={12} maxLength={128} autoComplete="new-password" type="password" value={password} onChange={(event) => { setPassword(event.target.value); setCopied(false); }} className="input font-mono" /></Field>
+      <Field label="Confirm new password"><input required minLength={12} maxLength={128} autoComplete="new-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className="input font-mono" /></Field>
+      {error && <p role="alert" className="mt-3 text-sm text-rose-600">{error}</p>}
+      <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={busy} onClick={onClose} className="btn-secondary">Cancel</button><button disabled={busy || !password || !confirmPassword} className="btn-primary"><Check size={15} />{busy ? "Updating…" : "Set password"}</button></div>
+    </form>
+  </div>;
+}
+
+function CreatorProfileModal({ creator, account, leads, commissions, payments, clicks, referralUrl, onClose, onEdit, onManagePermissions, onAccountAction, onSetPassword }: {
   creator: Creator; account?: CreatorAccount; leads: Lead[]; commissions: Commission[]; payments: Payment[];
   clicks: number; referralUrl: string; onClose: () => void;
   onEdit: () => void; onManagePermissions: () => void;
   onAccountAction: (payload: { action: string; creatorId: string; active?: boolean }) => void;
+  onSetPassword: () => void;
 }) {
   const [preview, setPreview] = useState(false);
   const totalCommission = commissions.reduce((sum, item) => sum + Number(item.amount), 0);
@@ -572,7 +648,7 @@ function CreatorProfileModal({ creator, account, leads, commissions, payments, c
     <section role="dialog" aria-modal="true" aria-labelledby="creator-profile-title" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
       <div className="mb-5 flex items-start justify-between"><div><h2 id="creator-profile-title" className="text-lg font-semibold">{creator.name}</h2><p className="mt-1 text-sm text-slate-500">Creator profile and portal account</p></div><button onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100" aria-label="Close creator profile"><X size={18} /></button></div>
       <div className="mb-4 flex flex-wrap gap-2"><button onClick={onEdit} className="btn-secondary"><Settings size={14} /> Edit creator</button><button onClick={onManagePermissions} className="btn-secondary"><SlidersHorizontal size={14} /> Manage permissions</button>
-        {account?.linked ? <><button onClick={() => onAccountAction({ action: "reset-password", creatorId: creator.id })} className="btn-secondary"><KeyRound size={14} /> Reset password</button><button onClick={() => onAccountAction({ action: "set-active", creatorId: creator.id, active: !creator.is_active })} className="btn-secondary">{creator.is_active ? "Deactivate account" : "Activate account"}</button></>
+        {account?.linked ? <><button onClick={onSetPassword} className="btn-secondary"><KeyRound size={14} /> Set new password</button><button onClick={() => onAccountAction({ action: "reset-password", creatorId: creator.id })} className="btn-secondary"><MailPlus size={14} /> Email reset link</button><button onClick={() => onAccountAction({ action: "set-active", creatorId: creator.id, active: !creator.is_active })} className="btn-secondary">{creator.is_active ? "Deactivate account" : "Activate account"}</button></>
           : <button onClick={() => onAccountAction({ action: "invite", creatorId: creator.id })} className="btn-secondary"><MailPlus size={14} /> Send invitation</button>}
       </div>
       <button onClick={() => setPreview((value) => !value)} className="btn-secondary mb-4"><Eye size={14} />{preview ? "Hide creator dashboard preview" : "View creator dashboard"}</button>

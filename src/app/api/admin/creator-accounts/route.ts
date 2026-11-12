@@ -5,6 +5,7 @@ const creatorIdSchema = z.string().uuid();
 const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("invite"), creatorId: creatorIdSchema }),
   z.object({ action: z.literal("reset-password"), creatorId: creatorIdSchema }),
+  z.object({ action: z.literal("set-password"), creatorId: creatorIdSchema, password: z.string().min(12).max(128) }),
   z.object({ action: z.literal("update-email"), creatorId: creatorIdSchema, email: z.string().trim().email().max(254) }),
   z.object({ action: z.literal("set-active"), creatorId: creatorIdSchema, active: z.boolean() }),
 ]);
@@ -84,6 +85,15 @@ export async function POST(request: Request) {
       const { error } = await getServerSupabase().auth.resetPasswordForEmail(creator.email, { redirectTo });
       if (error) throw error;
       return Response.json({ success: true, message: "Password reset email sent." });
+    }
+
+    if (parsed.data.action === "set-password") {
+      const { error } = await admin.auth.admin.updateUserById(creator.auth_user_id, { password: parsed.data.password });
+      if (error) throw error;
+      return Response.json({
+        success: true,
+        message: "Creator password updated. Share it with the creator through a secure channel.",
+      }, { headers: { "Cache-Control": "no-store" } });
     }
 
     if (parsed.data.action === "update-email") {

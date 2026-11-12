@@ -55,7 +55,7 @@ The webhook validates bearer authentication in constant time, validates every fi
 
 ### Creator Portal and account permissions
 
-- The admin can create a creator login while adding the creator, send an invitation, trigger password-reset emails, change the account email, and activate or deactivate portal access from **Creators**. Creator passwords are set directly through Supabase Auth and are never stored in CreatorTrack.
+- The admin can create a creator login while adding the creator, send an invitation, trigger password-reset emails, set a new password for an existing linked account, change the account email, and activate or deactivate portal access from **Creators**. Setting a password immediately replaces the old one; the password is sent only to Supabase Auth and is never stored by CreatorTrack. Share it through a secure channel and ask the creator to change it after signing in.
 - Creators sign in at `/creator/login` and are redirected to `/creator/dashboard`. Invite and password-reset links return to the secure password setup flow on the login page.
 - Each creator's **Manage dashboard access** settings are stored on their creator record. The defaults expose only their referral link, total leads, and completed clients.
 - Creator dashboard statistics are served by a permission-filtered server-side database function. Customer names, emails, phone numbers, and internal notes are not returned. Direct table RLS also prevents creators from reading customer records, commissions, payments, click events, and referral-link records.
